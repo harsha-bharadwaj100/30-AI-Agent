@@ -1,19 +1,63 @@
-from flask import Flask, render_template
+import os
+import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from dotenv import load_dotenv
 
-# Initialize the Flask application
-app = Flask(__name__)
+# Load environment variables from the .env file
+load_dotenv()
+
+# Initialize the FastAPI application
+app = FastAPI()
 
 
-# Define the route for the main page
-@app.route("/")
-def index():
+# Pydantic model to define the structure of the request body
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str = "en-US-natalie"  # A default voice ID
+
+
+# Murf API configuration
+MURF_API_URL = "https://api.murf.ai/v1/speech/generate"
+MURF_API_KEY = os.getenv("MURF_API_KEY")
+
+
+@app.post("/generate-audio/")
+async def generate_audio(request: TTSRequest):
     """
-    This function handles requests to the root URL and renders the index.html page.
+    Accepts text and a voice ID, calls the Murf TTS API,
+    and returns the URL of the generated audio file.
     """
-    return render_template("index.html")
+    if not MURF_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="API key not found. Ensure it is set in your .env file.",
+        )
 
+    headers = {"Content-Type": "application/json", "api-key": MURF_API_KEY}
 
-# Run the Flask application
-if __name__ == "__main__":
-    # Setting debug=True enables auto-reloading when changes are made
-    app.run(debug=True)
+    payload = {"text": request.text, "voiceId": request.voice_id, "format": "MP3"}
+
+    try:
+        # Make the POST request to the Murf API
+        response = requests.post(MURF_API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+
+        data = response.json()
+        # --- THIS IS THE FIX ---
+        # The key from Murf's API is 'audioFile', not 'audioUrl'
+        audio_url = data.get("audioFile")
+
+        if not audio_url:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "Audio URL not found in Murf API response.",
+                    "murf_api_response": data,
+                },
+            )
+
+        return {"audio_url": audio_url}
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Error calling Murf API: {e}")

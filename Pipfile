@@ -5,6 +5,10 @@ name = "pypi"
 
 [packages]
 flask = "*"
+fastapi = "*"
+uvicorn = "*"
+python-dotenv = "*"
+requests = "*"
 
 [dev-packages]
 
