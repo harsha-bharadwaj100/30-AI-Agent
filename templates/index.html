@@ -9,10 +9,21 @@
 
 <body>
     <h1>30 Days AI Voice Agent Project</h1>
-    <p>Day 1: Project Setup Complete!</p>
 
-    <!-- Link to the JavaScript file -->
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <!-- Form for user input -->
+    <form id="tts-form">
+        <label for="text-input">Enter Text:</label>
+        <input type="text" id="text-input" placeholder="Type something to say..." required>
+        <button type="submit" id="submit-button">Generate Audio</button>
+    </form>
+
+    <!-- Audio player -->
+    <div id="audio-container" style="margin-top: 20px;">
+        <audio id="audio-playback" controls></audio>
+    </div>
+
+    <!-- The corrected line is below -->
+    <script src="{{ url_for('static', path='script.js') }}"></script>
 </body>
 
 </html>
