@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,31 +12,31 @@
             margin: 0 auto;
             padding: 20px;
         }
-        
+
         section {
             border: 1px solid #ddd;
             margin: 20px 0;
             padding: 20px;
             border-radius: 5px;
         }
-        
+
         button {
             padding: 10px 15px;
             margin: 5px;
             cursor: pointer;
         }
-        
+
         input[type="text"] {
             width: 300px;
             padding: 8px;
             margin: 5px;
         }
-        
+
         audio {
             margin: 10px 0;
             width: 100%;
         }
-        
+
         .recording {
             background-color: #ffebee;
             color: #c62828;
@@ -44,15 +45,22 @@
             margin: 10px 0;
             display: none;
         }
-        
+
         .recording.active {
             display: block;
         }
+
+        #upload-status {
+            margin-top: 15px;
+            font-style: italic;
+            color: #333;
+        }
     </style>
 </head>
+
 <body>
     <h1>30 Days AI Voice Agent Project</h1>
-    
+
     <!-- TTS Section -->
     <section>
         <h2>Text to Speech</h2>
@@ -61,7 +69,6 @@
             <input type="text" id="text-input" placeholder="Type something to say..." required>
             <button type="submit" id="submit-button">Generate Audio</button>
         </form>
-        
         <div id="audio-container" style="margin-top: 20px;">
             <audio id="audio-playback" controls></audio>
         </div>
@@ -70,23 +77,26 @@
     <!-- Echo Bot Section -->
     <section>
         <h1>Echo Bot</h1>
-        <p>Record your voice and play it back instantly!</p>
-        
+        <p>Record your voice, play it back, and upload it!</p>
+
         <div>
             <button id="start-recording" type="button">Start Recording</button>
             <button id="stop-recording" type="button" disabled>Stop Recording</button>
         </div>
-        
+
         <div id="recording-status" class="recording">
             🔴 Recording in progress...
         </div>
-        
+
         <div id="echo-audio-container" style="margin-top: 20px;">
             <audio id="echo-playback" controls></audio>
         </div>
+
+        <!-- NEW: Upload Status Message -->
+        <div id="upload-status"></div>
     </section>
 
-    <!-- Link to the JavaScript file -->
     <script src="{{ url_for('static', path='script.js') }}"></script>
 </body>
+
 </html>
