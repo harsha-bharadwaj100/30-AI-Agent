@@ -1,10 +1,10 @@
 document.addEventListener("DOMContentLoaded", () => {
   // === TEXT TO SPEECH FUNCTIONALITY ===
+  // (Code from previous day, no changes needed)
   const ttsForm = document.getElementById("tts-form");
   const textInput = document.getElementById("text-input");
   const audioPlayback = document.getElementById("audio-playback");
   const submitButton = document.getElementById("submit-button");
-
   ttsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = textInput.value;
@@ -14,7 +14,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     submitButton.disabled = true;
     submitButton.textContent = "Generating...";
-
     try {
       const response = await fetch("/generate-audio/", {
         method: "POST",
@@ -37,39 +36,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // === ECHO BOT FUNCTIONALITY ===
+  // === ECHO & TRANSCRIBE BOT FUNCTIONALITY ===
   const startRecordingBtn = document.getElementById("start-recording");
   const stopRecordingBtn = document.getElementById("stop-recording");
   const recordingStatus = document.getElementById("recording-status");
   const echoPlayback = document.getElementById("echo-playback");
-  const uploadStatus = document.getElementById("upload-status"); // New element
+  const transcriptionStatus = document.getElementById("transcription-status");
+  const transcriptionResult = document.getElementById("transcription-result");
 
   let mediaRecorder;
   let recordedChunks = [];
 
-  // --- NEW: Function to upload audio ---
-  async function uploadAudio(audioBlob) {
-    uploadStatus.textContent = "Uploading...";
+  // --- UPDATED: Function to transcribe audio ---
+  async function transcribeAudio(audioBlob) {
+    transcriptionStatus.textContent = "Transcribing...";
+    transcriptionResult.style.display = "none";
+
     const formData = new FormData();
-    // The filename can be customized. Using a timestamp for uniqueness.
     formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
 
     try {
-      const response = await fetch("/upload-audio/", {
+      const response = await fetch("/transcribe/file", {
+        // Use the new endpoint
         method: "POST",
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error("Upload failed. Server responded with an error.");
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Transcription failed.");
       }
+
       const result = await response.json();
-      uploadStatus.textContent = `Upload successful: ${
-        result.filename
-      } (${Math.round(result.size_in_bytes / 1024)} KB)`;
+      transcriptionStatus.textContent = "Transcription successful!";
+      transcriptionResult.textContent = `"${result.transcription}"`;
+      transcriptionResult.style.display = "block";
     } catch (error) {
-      console.error("Upload Error:", error);
-      uploadStatus.textContent = `Upload failed: ${error.message}`;
+      console.error("Transcription Error:", error);
+      transcriptionStatus.textContent = `Transcription failed: ${error.message}`;
     }
   }
 
@@ -78,7 +82,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorder = new MediaRecorder(stream);
       recordedChunks = [];
-      uploadStatus.textContent = ""; // Clear previous status
+      transcriptionStatus.textContent = ""; // Clear previous status
+      transcriptionResult.style.display = "none";
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -90,10 +95,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = new Blob(recordedChunks, { type: "audio/webm" });
         const audioUrl = URL.createObjectURL(blob);
         echoPlayback.src = audioUrl;
-        echoPlayback.style.display = "block";
 
-        // --- NEW: Call the upload function ---
-        uploadAudio(blob);
+        // --- Call the new transcribe function ---
+        transcribeAudio(blob);
 
         stream.getTracks().forEach((track) => track.stop());
         recordingStatus.classList.remove("active");
@@ -106,7 +110,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (error) {
       console.error("Error accessing microphone:", error);
       alert(
-        "Could not access microphone. Please ensure you have granted permission."
+        "Could not access microphone. Please ensure permission is granted."
       );
     }
   });

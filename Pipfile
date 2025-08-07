@@ -10,6 +10,7 @@ uvicorn = "*"
 python-dotenv = "*"
 requests = "*"
 python-multipart = "*"
+assemblyai = "*"
 
 [dev-packages]
 

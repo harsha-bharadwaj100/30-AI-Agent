@@ -1,6 +1,7 @@
 import os
 import shutil
 import requests
+import assemblyai as aai  # Import AssemblyAI
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -29,21 +30,23 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Create Uploads Directory ---
+# --- Create Uploads Directory (for Day 5 functionality) ---
 UPLOADS_DIR = "uploads"
 if not os.path.exists(UPLOADS_DIR):
     os.makedirs(UPLOADS_DIR)
+
+# --- API Key Configuration ---
+MURF_API_KEY = os.getenv("MURF_API_KEY")
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+
+# Configure AssemblyAI
+aai.settings.api_key = ASSEMBLYAI_API_KEY
 
 
 # Pydantic model for TTS request
 class TTSRequest(BaseModel):
     text: str
     voice_id: str = "en-US-natalie"
-
-
-# Murf API configuration
-MURF_API_URL = "https://api.murf.ai/v1/speech/generate"
-MURF_API_KEY = os.getenv("MURF_API_KEY")
 
 
 # --- Frontend Route ---
@@ -53,16 +56,14 @@ async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# --- TTS API Endpoint ---
+# --- TTS API Endpoint (Day 3) ---
 @app.post("/generate-audio/")
 async def generate_audio(request: TTSRequest):
-    """Calls the Murf TTS API and returns the audio URL."""
+    # (Code from previous day, no changes needed)
     if not MURF_API_KEY:
-        raise HTTPException(status_code=500, detail="API key not found.")
-
+        raise HTTPException(status_code=500, detail="Murf API key not found.")
     headers = {"Content-Type": "application/json", "api-key": MURF_API_KEY}
     payload = {"text": request.text, "voiceId": request.voice_id, "format": "MP3"}
-
     try:
         response = requests.post(MURF_API_URL, headers=headers, json=payload)
         response.raise_for_status()
@@ -77,28 +78,16 @@ async def generate_audio(request: TTSRequest):
         raise HTTPException(status_code=502, detail=f"Error calling Murf API: {e}")
 
 
-# --- NEW: Audio Upload Endpoint ---
+# --- Audio Upload Endpoint (Day 5) ---
 @app.post("/upload-audio/")
 async def upload_audio(audio: UploadFile = File(...)):
-    """
-    Receives an audio file, saves it, and returns its details.
-    """
-    if not audio:
-        raise HTTPException(status_code=400, detail="No audio file sent.")
-
-    # Define the file path
+    # (Code from previous day, no changes needed)
     file_path = os.path.join(UPLOADS_DIR, audio.filename)
-
     try:
-        # Save the uploaded file
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(audio.file, buffer)
-
-        # Get file size
         file_size = os.path.getsize(file_path)
-
         return {
-            "message": "File uploaded successfully!",
             "filename": audio.filename,
             "content_type": audio.content_type,
             "size_in_bytes": file_size,
@@ -107,5 +96,35 @@ async def upload_audio(audio: UploadFile = File(...)):
         raise HTTPException(
             status_code=500, detail=f"There was an error uploading the file: {e}"
         )
+    finally:
+        audio.file.close()
+
+
+# --- NEW: Transcription Endpoint (Day 6) ---
+@app.post("/transcribe/file")
+async def transcribe_file(audio: UploadFile = File(...)):
+    """
+    Accepts an audio file and returns the transcription.
+    """
+    if not ASSEMBLYAI_API_KEY:
+        raise HTTPException(status_code=500, detail="AssemblyAI API key not found.")
+
+    try:
+        # The SDK directly handles the uploaded file object
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(audio.file)
+
+        if transcript.status == aai.TranscriptStatus.error:
+            raise HTTPException(status_code=500, detail=transcript.error)
+
+        if not transcript.text:
+            raise HTTPException(
+                status_code=400, detail="Empty or invalid audio received."
+            )
+
+        return {"transcription": transcript.text}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         audio.file.close()
