@@ -1,10 +1,10 @@
 document.addEventListener("DOMContentLoaded", () => {
   // === TEXT TO SPEECH FUNCTIONALITY ===
-  // (Code from previous day, no changes needed)
   const ttsForm = document.getElementById("tts-form");
   const textInput = document.getElementById("text-input");
   const audioPlayback = document.getElementById("audio-playback");
   const submitButton = document.getElementById("submit-button");
+
   ttsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = textInput.value;
@@ -21,8 +21,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({ text: text }),
       });
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to generate audio.");
+        throw new Error("Failed to generate audio.");
       }
       const data = await response.json();
       audioPlayback.src = data.audio_url;
@@ -36,44 +35,43 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // === ECHO & TRANSCRIBE BOT FUNCTIONALITY ===
+  // === ECHO BOT V2 FUNCTIONALITY ===
   const startRecordingBtn = document.getElementById("start-recording");
   const stopRecordingBtn = document.getElementById("stop-recording");
   const recordingStatus = document.getElementById("recording-status");
   const echoPlayback = document.getElementById("echo-playback");
-  const transcriptionStatus = document.getElementById("transcription-status");
-  const transcriptionResult = document.getElementById("transcription-result");
+  const echoStatus = document.getElementById("echo-status");
 
   let mediaRecorder;
   let recordedChunks = [];
 
-  // --- UPDATED: Function to transcribe audio ---
-  async function transcribeAudio(audioBlob) {
-    transcriptionStatus.textContent = "Transcribing...";
-    transcriptionResult.style.display = "none";
-
+  // --- NEW: Function to handle the full Echo Bot v2 flow ---
+  async function getEcho(audioBlob) {
+    echoStatus.textContent = "Transcribing your voice...";
     const formData = new FormData();
     formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
 
     try {
-      const response = await fetch("/transcribe/file", {
-        // Use the new endpoint
+      const response = await fetch("/tts/echo", {
+        // Call the new endpoint
         method: "POST",
         body: formData,
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || "Transcription failed.");
+        throw new Error(errorData.detail || "Failed to process audio.");
       }
 
+      echoStatus.textContent = "Generating my response...";
       const result = await response.json();
-      transcriptionStatus.textContent = "Transcription successful!";
-      transcriptionResult.textContent = `"${result.transcription}"`;
-      transcriptionResult.style.display = "block";
+
+      echoPlayback.src = result.audio_url;
+      echoPlayback.play();
+      echoStatus.textContent = "Done!";
     } catch (error) {
-      console.error("Transcription Error:", error);
-      transcriptionStatus.textContent = `Transcription failed: ${error.message}`;
+      console.error("Echo Error:", error);
+      echoStatus.textContent = `Error: ${error.message}`;
     }
   }
 
@@ -82,8 +80,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorder = new MediaRecorder(stream);
       recordedChunks = [];
-      transcriptionStatus.textContent = ""; // Clear previous status
-      transcriptionResult.style.display = "none";
+      echoStatus.textContent = ""; // Clear previous status
+      echoPlayback.src = ""; // Clear previous audio
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -93,11 +91,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: "audio/webm" });
-        const audioUrl = URL.createObjectURL(blob);
-        echoPlayback.src = audioUrl;
+        // Don't play the user's audio back, instead, send it for processing
+        // const audioUrl = URL.createObjectURL(blob);
+        // echoPlayback.src = audioUrl;
 
-        // --- Call the new transcribe function ---
-        transcribeAudio(blob);
+        getEcho(blob); // Call the new handler function
 
         stream.getTracks().forEach((track) => track.stop());
         recordingStatus.classList.remove("active");

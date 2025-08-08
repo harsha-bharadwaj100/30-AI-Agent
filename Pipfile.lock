@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "4031192d693921ff51580aa52d9b469176c8cdb79523c9034f4939a22a4ecce1"
+            "sha256": "b2b670b7b51dd98f5740a3667319d13faf23380758efaa99387696b65a95377d"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -303,6 +303,15 @@
             ],
             "markers": "python_version >= '3.9'",
             "version": "==3.0.2"
+        },
+        "murf": {
+            "hashes": [
+                "sha256:0919e178c65c589b9d91e2aa07e8ea8a45716c4a98b2ad5cc60d3f26f7a52ab4",
+                "sha256:84a60b3f842be2a642c2c7036ed7a77e8ab5d1fe0839f4a6d0c6312ff52faf3d"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.8' and python_version < '4.0'",
+            "version": "==2.0.2"
         },
         "pydantic": {
             "hashes": [

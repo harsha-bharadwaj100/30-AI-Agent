@@ -50,16 +50,10 @@
             display: block;
         }
 
-        #transcription-status,
-        #transcription-result {
+        #echo-status {
             margin-top: 15px;
-        }
-
-        #transcription-result {
-            background-color: #f0f4f8;
-            border-left: 4px solid #4a90e2;
-            padding: 10px;
             font-style: italic;
+            color: #333;
         }
     </style>
 </head>
@@ -80,10 +74,10 @@
         </div>
     </section>
 
-    <!-- Echo Bot & Transcription Section -->
+    <!-- Echo Bot v2 Section -->
     <section>
-        <h1>Echo & Transcribe Bot</h1>
-        <p>Record your voice, play it back, and get a transcription!</p>
+        <h1>Echo Bot v2</h1>
+        <p>Record your voice, and I will repeat it back in my own voice!</p>
 
         <div>
             <button id="start-recording" type="button">Start Recording</button>
@@ -98,9 +92,8 @@
             <audio id="echo-playback" controls></audio>
         </div>
 
-        <!-- NEW: Transcription Status and Result -->
-        <div id="transcription-status"></div>
-        <div id="transcription-result" style="display:none;"></div>
+        <!-- NEW: Status for the echo process -->
+        <div id="echo-status"></div>
     </section>
 
     <script src="{{ url_for('static', path='script.js') }}"></script>
