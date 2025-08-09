@@ -12,6 +12,8 @@ requests = "*"
 python-multipart = "*"
 assemblyai = "*"
 murf = "*"
+google-genai = "*"
+google-generativeai = "*"
 
 [dev-packages]
 

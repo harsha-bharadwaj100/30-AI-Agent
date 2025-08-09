@@ -2,7 +2,8 @@ import os
 import shutil
 import requests
 import assemblyai as aai
-from murf.client import Murf  # Import the Murf SDK client
+import google.generativeai as genai  # Import Google GenAI
+from murf.client import Murf
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -34,6 +35,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # --- API Key and SDK Configuration ---
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # New Gemini Key
 
 # Configure AssemblyAI
 aai.settings.api_key = ASSEMBLYAI_API_KEY
@@ -41,11 +43,19 @@ aai.settings.api_key = ASSEMBLYAI_API_KEY
 # Initialize Murf SDK client
 murf = Murf(api_key=MURF_API_KEY)
 
+# Configure Google GenAI
+genai.configure(api_key=GEMINI_API_KEY)
 
-# Pydantic model for TTS request
+
+# --- Pydantic Models ---
 class TTSRequest(BaseModel):
     text: str
     voice_id: str = "en-US-natalie"
+
+
+# NEW: Pydantic model for LLM query
+class LLMQueryRequest(BaseModel):
+    text: str
 
 
 # --- Frontend Route ---
@@ -64,8 +74,7 @@ async def generate_audio(request: TTSRequest):
         api_response = murf.text_to_speech.generate(
             text=request.text, voice_id=request.voice_id
         )
-        # The response is a dictionary, access the URL with .get()
-        return {"audio_url": api_response.get("audioUrl")}
+        return {"audio_url": api_response.audio_file}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calling Murf API: {e}")
 
@@ -93,11 +102,9 @@ async def tts_echo(audio: UploadFile = File(...)):
         if not transcript.text:
             raise HTTPException(status_code=400, detail="Could not understand audio.")
 
-        # 2. Generate new audio from the transcript using Murf
         api_response = murf.text_to_speech.generate(
             text=transcript.text, voice_id="en-US-terrell"
         )
-        print(api_response)
         return {"audio_url": api_response.audio_file}
 
     except Exception as e:
@@ -105,3 +112,30 @@ async def tts_echo(audio: UploadFile = File(...)):
     finally:
         if audio and not audio.file.closed:
             audio.file.close()
+
+
+# --- NEW: LLM Query Endpoint (Day 8) ---
+@app.post("/llm/query")
+async def llm_query(request: LLMQueryRequest):
+    """
+    Accepts text, sends it to the Gemini LLM, and returns the response.
+    """
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured.")
+
+    if not request.text:
+        raise HTTPException(status_code=400, detail="Input text cannot be empty.")
+
+    try:
+        # Initialize the Gemini Pro model
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        # Generate content
+        response = model.generate_content(request.text)
+
+        return {"response": response.text}
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred with the Gemini API: {str(e)}"
+        )
