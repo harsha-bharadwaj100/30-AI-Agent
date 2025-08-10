@@ -1,114 +1,62 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // === TEXT TO SPEECH FUNCTIONALITY ===
-  const ttsForm = document.getElementById("tts-form");
-  const textInput = document.getElementById("text-input");
-  const audioPlayback = document.getElementById("audio-playback");
-  const submitButton = document.getElementById("submit-button");
-
-  ttsForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const text = textInput.value;
-    if (!text) {
-      alert("Please enter some text.");
-      return;
-    }
-    submitButton.disabled = true;
-    submitButton.textContent = "Generating...";
-    try {
-      const response = await fetch("/generate-audio/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text }),
-      });
-      if (!response.ok) {
-        throw new Error("Failed to generate audio.");
-      }
-      const data = await response.json();
-      audioPlayback.src = data.audio_url;
-      audioPlayback.play();
-    } catch (error) {
-      console.error("Error:", error);
-      alert("An error occurred: " + error.message);
-    } finally {
-      submitButton.disabled = false;
-      submitButton.textContent = "Generate Audio";
-    }
-  });
-
-  // === ECHO BOT V2 FUNCTIONALITY ===
+  // Elements
   const startRecordingBtn = document.getElementById("start-recording");
   const stopRecordingBtn = document.getElementById("stop-recording");
-  const recordingStatus = document.getElementById("recording-status");
-  const echoPlayback = document.getElementById("echo-playback");
-  const echoStatus = document.getElementById("echo-status");
+  const playbackAudio = document.getElementById("echo-playback"); // Use existing audio element for playback
+  const statusDiv = document.getElementById("echo-status");
 
   let mediaRecorder;
   let recordedChunks = [];
-
-  // --- NEW: Function to handle the full Echo Bot v2 flow ---
-  async function getEcho(audioBlob) {
-    echoStatus.textContent = "Transcribing your voice...";
-    const formData = new FormData();
-    formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
-
-    try {
-      const response = await fetch("/tts/echo", {
-        // Call the new endpoint
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to process audio.");
-      }
-
-      echoStatus.textContent = "Generating my response...";
-      const result = await response.json();
-
-      echoPlayback.src = result.audio_url;
-      echoPlayback.play();
-      echoStatus.textContent = "Done!";
-    } catch (error) {
-      console.error("Echo Error:", error);
-      echoStatus.textContent = `Error: ${error.message}`;
-    }
-  }
 
   startRecordingBtn.addEventListener("click", async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorder = new MediaRecorder(stream);
       recordedChunks = [];
-      echoStatus.textContent = ""; // Clear previous status
-      echoPlayback.src = ""; // Clear previous audio
+      statusDiv.textContent = "";
+      playbackAudio.src = "";
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunks.push(event.data);
-        }
+        if (event.data.size > 0) recordedChunks.push(event.data);
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const blob = new Blob(recordedChunks, { type: "audio/webm" });
-        // Don't play the user's audio back, instead, send it for processing
-        // const audioUrl = URL.createObjectURL(blob);
-        // echoPlayback.src = audioUrl;
+        statusDiv.textContent = "Processing your request...";
 
-        getEcho(blob); // Call the new handler function
+        // Prepare FormData and send to /llm/query
+        const formData = new FormData();
+        formData.append("audio", blob, `recording-${Date.now()}.webm`);
 
-        stream.getTracks().forEach((track) => track.stop());
-        recordingStatus.classList.remove("active");
+        try {
+          const response = await fetch("/llm/query", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || "Request failed");
+          }
+
+          const data = await response.json();
+          playbackAudio.src = data.audio_url;
+          playbackAudio.play();
+          statusDiv.textContent = "Here is my response!";
+        } catch (error) {
+          console.error("Error:", error);
+          statusDiv.textContent = "Error: " + error.message;
+        }
       };
 
       mediaRecorder.start();
       startRecordingBtn.disabled = true;
       stopRecordingBtn.disabled = false;
-      recordingStatus.classList.add("active");
-    } catch (error) {
-      console.error("Error accessing microphone:", error);
+      statusDiv.textContent = "Recording...";
+    } catch (err) {
+      console.error("Microphone access error:", err);
       alert(
-        "Could not access microphone. Please ensure permission is granted."
+        "Could not access microphone. Please allow microphone permissions."
       );
     }
   });
@@ -118,6 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
       mediaRecorder.stop();
       startRecordingBtn.disabled = false;
       stopRecordingBtn.disabled = true;
+      statusDiv.textContent = "";
     }
   });
 });
