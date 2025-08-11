@@ -1,4 +1,5 @@
 import os
+import shutil
 import requests
 import assemblyai as aai
 import google.generativeai as genai
@@ -14,10 +15,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize FastAPI app
+# Initialize FastAPI
 app = FastAPI()
 
-# CORS Setup
+# --- CORS Middleware Setup ---
 origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
@@ -27,59 +28,56 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Template and static files setup
+# --- Template and Static File Setup ---
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Load API keys from environment
+# --- API Key and SDK Configuration ---
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure AssemblyAI and Gemini API
 aai.settings.api_key = ASSEMBLYAI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
-
-# Initialize Murf client
 murf = Murf(api_key=MURF_API_KEY)
 
+# --- In-Memory Datastore for Chat History ---
+# NOTE: This is a simple dictionary for prototyping.
+# In a production environment, this would be a database (e.g., Redis, PostgreSQL).
+# This will be cleared every time the server restarts.
+chat_histories = {}
 
-# Pydantic model for text requests (can be used by other endpoints)
+
+# --- Pydantic Models (can be kept for other endpoints) ---
 class TTSRequest(BaseModel):
     text: str
-    voice_id: str = "en-US-natalie"
 
 
-# Frontend route
+class LLMQueryRequest(BaseModel):
+    text: str
+
+
+# --- Frontend Route ---
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
+    """Serves the main index.html page."""
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# Existing Text-to-Speech endpoint (Day 3)
-@app.post("/generate-audio/")
-async def generate_audio(request: TTSRequest):
-    if not MURF_API_KEY:
-        raise HTTPException(status_code=500, detail="Murf API key not configured.")
-    try:
-        api_response = murf.text_to_speech.generate(
-            text=request.text, voice_id=request.voice_id
-        )
-        return {"audio_url": api_response.audio_file}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calling Murf API: {e}")
-
-
-# --- UPDATED /llm/query endpoint to accept audio input (Day 9) ---
-@app.post("/llm/query")
-async def llm_query(audio: UploadFile = File(...)):
+# --- NEW: Conversational Agent Endpoint (Day 10) ---
+@app.post("/agent/chat/{session_id}")
+async def agent_chat(session_id: str, audio: UploadFile = File(...)):
+    """
+    Handles a full conversational turn:
+    Audio (user) -> STT -> Append to History -> LLM -> Append to History -> TTS -> Audio (bot)
+    """
     if not (GEMINI_API_KEY and ASSEMBLYAI_API_KEY and MURF_API_KEY):
         raise HTTPException(
             status_code=500, detail="One or more API keys are not configured."
         )
 
     try:
-        # 1. Transcribe the audio with AssemblyAI
+        # 1. Transcribe audio to text with AssemblyAI
         transcriber = aai.Transcriber()
         transcript = transcriber.transcribe(audio.file)
 
@@ -90,25 +88,32 @@ async def llm_query(audio: UploadFile = File(...)):
         if not transcript.text:
             raise HTTPException(status_code=400, detail="Could not understand audio.")
 
-        # 2. Generate LLM response via Gemini API
+        # 2. Retrieve or initialize chat history for the session
+        session_history = chat_histories.get(session_id, [])
+        session_history.append({"role": "user", "parts": [transcript.text]})
+
+        # 3. Generate LLM response with history via Gemini API
         model = genai.GenerativeModel("gemini-1.5-flash")
-        llm_response = model.generate_content(transcript.text)
+        # The Gemini API expects the history in this format
+        chat_session = model.start_chat(history=session_history[:-1])
+        llm_response = chat_session.send_message(session_history[-1])
 
-        # 3. Handle character limit for Murf API (max 3000 chars)
         llm_text = llm_response.text.strip()
-        max_chars = 3000
 
-        # If response > 3000 chars, truncate or split (here, we truncate)
-        if len(llm_text) > max_chars:
-            llm_text = llm_text[:max_chars]
+        # 4. Append LLM's response to the history
+        session_history.append({"role": "model", "parts": [llm_text]})
+        chat_histories[session_id] = session_history
 
-        # 4. Generate speech audio for LLM response using Murf
+        # 5. Handle character limit for Murf API (max 3000 chars)
+        if len(llm_text) > 3000:
+            llm_text = llm_text[:3000]
+
+        # 6. Generate speech audio for LLM response using Murf
         murf_response = murf.text_to_speech.generate(
             text=llm_text,
-            voice_id="en-US-natalie",  # You can change the voice as needed
+            voice_id="en-US-natalie",  # Using Natalie's voice for the agent
         )
 
-        # Return the audio url to the client
         return {"audio_url": murf_response.audio_file}
 
     except Exception as e:
