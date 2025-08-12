@@ -24,6 +24,7 @@
 
         h1 {
             text-align: center;
+            color: #333;
         }
 
         button {
@@ -33,6 +34,11 @@
             border-radius: 5px;
             border: 1px solid #ccc;
             background-color: #f0f0f0;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #e0e0e0;
         }
 
         button:disabled {
@@ -57,30 +63,79 @@
             width: 100%;
         }
 
-        #status {
+        .status {
             margin-top: 15px;
             font-style: italic;
             color: #555;
             text-align: center;
             height: 20px;
         }
+
+        .status.error {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+
+        .error-message {
+            display: none;
+            margin-top: 15px;
+            padding: 12px;
+            background-color: #ffebee;
+            border: 1px solid #f44336;
+            border-radius: 4px;
+            color: #c62828;
+            font-size: 14px;
+        }
+
+        .error-message.show {
+            display: block;
+            animation: slideIn 0.3s ease-in;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .info {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 10px;
+            margin: 15px 0;
+            font-size: 14px;
+        }
     </style>
 </head>
 
 <body>
     <section>
-        <h1>Conversational AI Agent</h1>
-        <p style="text-align: center;">Click "Start" and begin your conversation. The agent will listen again
-            automatically after it responds.</p>
+        <h1>AI Voice Agent</h1>
+        <div class="info">
+            <strong>How it works:</strong> Click "Start", speak your message, then click "Stop". The AI will respond
+            automatically and listen for your next message.
+        </div>
 
-        <div style="text-align: center;">
+        <div class="controls">
             <button id="start-recording" type="button">Start Conversation</button>
             <button id="stop-recording" type="button" disabled>Stop Speaking</button>
         </div>
 
-        <div id="status">Press "Start" to begin.</div>
+        <div id="status" class="status">Press "Start" to begin conversation.</div>
+        <div id="error-message" class="error-message"></div>
 
-        <div id="audio-container" style="margin-top: 20px;">
+        <div style="margin-top: 20px;">
             <audio id="playback-audio" controls></audio>
         </div>
     </section>
