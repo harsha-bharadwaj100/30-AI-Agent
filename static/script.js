@@ -1,61 +1,20 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // --- UI Elements ---
-  const startRecordingBtn = document.getElementById("start-recording");
-  const stopRecordingBtn = document.getElementById("stop-recording");
-  const playbackAudio = document.getElementById("playback-audio");
+  // UI Elements
+  const voiceButton = document.getElementById("voice-button");
+  const buttonIcon = document.getElementById("button-icon");
   const statusDiv = document.getElementById("status");
-  const errorDiv = document.getElementById("error-message");
+  const audioVisualizer = document.getElementById("audio-visualizer");
+  const responseAudio = document.getElementById("response-audio");
+  const sessionInfo = document.getElementById("session-info");
 
-  // --- State Management ---
+  // State management
   let mediaRecorder;
   let recordedChunks = [];
   let sessionId = null;
+  let isRecording = false;
   let isProcessing = false;
 
-  // --- Error Display Functions ---
-  function showError(message, isTemporary = true) {
-    if (errorDiv) {
-      errorDiv.textContent = message;
-      errorDiv.style.display = "block";
-      errorDiv.className = "error-message show";
-
-      if (isTemporary) {
-        setTimeout(() => {
-          hideError();
-        }, 5000);
-      }
-    }
-    console.error("Application Error:", message);
-  }
-
-  function hideError() {
-    if (errorDiv) {
-      errorDiv.style.display = "none";
-      errorDiv.className = "error-message";
-    }
-  }
-
-  function updateStatus(message, isError = false) {
-    if (statusDiv) {
-      statusDiv.textContent = message;
-      statusDiv.className = isError ? "status error" : "status";
-    }
-  }
-
-  // --- FIXED: Button State Management ---
-  function enableRecordingControls() {
-    startRecordingBtn.disabled = false;
-    stopRecordingBtn.disabled = true;
-    isProcessing = false;
-    updateStatus("Ready to listen...");
-  }
-
-  function disableAllControls() {
-    startRecordingBtn.disabled = true;
-    stopRecordingBtn.disabled = true;
-  }
-
-  // --- Initialize Session ---
+  // Initialize session
   function initializeSession() {
     const params = new URLSearchParams(window.location.search);
     if (params.has("session_id")) {
@@ -72,103 +31,81 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("Session ID:", sessionId);
   }
 
-  initializeSession();
+  // Update UI state
+  function updateUIState(state, message = "", icon = "") {
+    const states = {
+      ready: {
+        class: "ready",
+        buttonClass: "",
+        icon: "fas fa-microphone",
+        message: "Ready to listen",
+      },
+      listening: {
+        class: "listening",
+        buttonClass: "recording",
+        icon: "fas fa-stop",
+        message: "Listening... (click to stop)",
+      },
+      processing: {
+        class: "processing",
+        buttonClass: "processing",
+        icon: "fas fa-spinner fa-spin",
+        message: "Processing your request...",
+      },
+      responding: {
+        class: "processing",
+        buttonClass: "processing",
+        icon: "fas fa-volume-up",
+        message: "AI is responding...",
+      },
+      error: {
+        class: "error",
+        buttonClass: "",
+        icon: "fas fa-exclamation-triangle",
+        message: message || "Something went wrong",
+      },
+    };
 
-  // --- Core Agent Interaction Function ---
-  async function interactWithAgent(audioBlob) {
-    if (isProcessing) {
-      showError("Please wait for the current request to complete.");
-      return;
-    }
+    const currentState = states[state];
+    if (!currentState) return;
 
-    isProcessing = true;
-    disableAllControls();
-    hideError();
-    updateStatus("Processing your request...");
+    // Update status
+    statusDiv.className = `status ${currentState.class}`;
+    statusDiv.innerHTML = `<i class="${currentState.icon}"></i> ${currentState.message}`;
 
-    const formData = new FormData();
-    formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
+    // Update button
+    voiceButton.className = `voice-button ${currentState.buttonClass}`;
+    buttonIcon.className = currentState.icon;
 
-    try {
-      updateStatus("Connecting to AI services...");
-      const response = await fetch(`/agent/chat/${sessionId}`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage =
-          errorData.detail || `Server error (${response.status})`;
-        throw new Error(errorMessage);
-      }
-
-      const result = await response.json();
-
-      if (result.error) {
-        showError(result.message, false);
-        updateStatus("AI service temporarily unavailable", true);
-
-        if (result.audio_url) {
-          playbackAudio.src = result.audio_url;
-          playbackAudio.play().catch((e) => {
-            console.warn("Could not play fallback audio:", e);
-          });
-        }
-      } else if (result.audio_url) {
-        updateStatus("AI is responding...");
-        playbackAudio.src = result.audio_url;
-
-        playbackAudio.play().catch((playError) => {
-          console.warn("Audio playback failed:", playError);
-          showError(
-            "I generated a response but couldn't play the audio. Please check your speakers."
-          );
-          enableRecordingControls(); // Re-enable if playback fails
-        });
-      } else {
-        showError("Received an unexpected response from the server.");
-        enableRecordingControls();
-      }
-    } catch (error) {
-      console.error("Agent Interaction Error:", error);
-      showError(`Connection error: ${error.message}`);
-      enableRecordingControls();
+    // Show/hide visualizer
+    if (state === "listening") {
+      audioVisualizer.classList.add("active");
+    } else {
+      audioVisualizer.classList.remove("active");
     }
   }
 
-  // --- Microphone Access ---
-  async function requestMicrophoneAccess() {
+  // Handle voice interaction
+  async function handleVoiceInteraction() {
+    if (isProcessing) return;
+
+    if (!isRecording) {
+      startRecording();
+    } else {
+      stopRecording();
+    }
+  }
+
+  // Start recording
+  async function startRecording() {
     try {
-      return await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           sampleRate: 44100,
         },
       });
-    } catch (error) {
-      let errorMessage = "Could not access microphone. ";
-
-      if (error.name === "NotAllowedError") {
-        errorMessage += "Please allow microphone access and refresh the page.";
-      } else if (error.name === "NotFoundError") {
-        errorMessage += "No microphone found. Please connect a microphone.";
-      } else {
-        errorMessage += "Please check your microphone settings.";
-      }
-
-      throw new Error(errorMessage);
-    }
-  }
-
-  // --- Event Handlers ---
-  startRecordingBtn.addEventListener("click", async () => {
-    try {
-      hideError();
-      updateStatus("Requesting microphone access...");
-
-      const stream = await requestMicrophoneAccess();
 
       mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm;codecs=opus",
@@ -181,75 +118,151 @@ document.addEventListener("DOMContentLoaded", () => {
 
       mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: "audio/webm" });
-
         if (blob.size < 1000) {
-          showError(
-            "Recording seems too short. Please try speaking for longer."
-          );
-          enableRecordingControls();
+          updateUIState("error", "Recording too short. Please try again.");
+          resetToReady();
           return;
         }
-
-        interactWithAgent(blob);
+        processAudio(blob);
         stream.getTracks().forEach((track) => track.stop());
       };
 
       mediaRecorder.onerror = (error) => {
         console.error("MediaRecorder error:", error);
-        showError("Recording failed. Please try again.");
-        stream.getTracks().forEach((track) => track.stop());
-        enableRecordingControls();
+        updateUIState("error", "Recording failed. Please try again.");
+        resetToReady();
       };
 
       mediaRecorder.start();
-      startRecordingBtn.disabled = true;
-      stopRecordingBtn.disabled = false;
-      updateStatus("Listening...");
+      isRecording = true;
+      updateUIState("listening");
     } catch (error) {
-      console.error("Recording start error:", error);
-      showError(error.message);
-      enableRecordingControls();
-    }
-  });
+      console.error("Microphone access error:", error);
+      let errorMessage = "Could not access microphone. ";
 
-  stopRecordingBtn.addEventListener("click", () => {
+      if (error.name === "NotAllowedError") {
+        errorMessage += "Please allow microphone access and refresh the page.";
+      } else if (error.name === "NotFoundError") {
+        errorMessage += "No microphone found.";
+      } else {
+        errorMessage += "Please check your microphone settings.";
+      }
+
+      updateUIState("error", errorMessage);
+      setTimeout(resetToReady, 3000);
+    }
+  }
+
+  // Stop recording
+  function stopRecording() {
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
-      disableAllControls();
-      updateStatus("Processing...");
+      isRecording = false;
+      isProcessing = true;
+      updateUIState("processing");
     }
-  });
+  }
 
-  // --- FIXED: Automatic Conversation Loop ---
-  playbackAudio.addEventListener("ended", () => {
-    updateStatus("Response finished. Ready for your next message...");
-    // Automatically re-enable recording after the AI finishes speaking
-    setTimeout(() => {
-      enableRecordingControls();
-      // Automatically start listening for the next turn
-      setTimeout(() => {
-        if (!isProcessing) {
-          startRecordingBtn.click();
+  // Process audio with AI
+  async function processAudio(audioBlob) {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      const response = await fetch(`/agent/chat/${sessionId}`, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Server error (${response.status})`);
+      }
+
+      const result = await response.json();
+
+      if (result.error) {
+        updateUIState("error", result.message);
+        if (result.audio_url) {
+          responseAudio.src = result.audio_url;
+          responseAudio.play().catch(() => {});
         }
-      }, 500);
+        setTimeout(resetToReady, 3000);
+      } else if (result.audio_url) {
+        updateUIState("responding");
+        responseAudio.src = result.audio_url;
+        responseAudio.play().catch((error) => {
+          console.warn("Audio playback failed:", error);
+          updateUIState(
+            "error",
+            "Generated response but audio playback failed."
+          );
+          setTimeout(resetToReady, 3000);
+        });
+      } else {
+        updateUIState("error", "Unexpected response from server.");
+        setTimeout(resetToReady, 3000);
+      }
+    } catch (error) {
+      console.error("Processing error:", error);
+
+      if (error.name === "AbortError") {
+        updateUIState("error", "Request timed out. Please try again.");
+      } else if (!navigator.onLine) {
+        updateUIState(
+          "error",
+          "You appear to be offline. Please check your connection."
+        );
+      } else {
+        updateUIState("error", "Connection failed. Please try again.");
+      }
+
+      setTimeout(resetToReady, 3000);
+    }
+  }
+
+  // Reset to ready state
+  function resetToReady() {
+    isRecording = false;
+    isProcessing = false;
+    updateUIState("ready");
+  }
+
+  // Event listeners
+  voiceButton.addEventListener("click", handleVoiceInteraction);
+
+  // Auto-continue conversation after AI response
+  responseAudio.addEventListener("ended", () => {
+    setTimeout(() => {
+      if (!isProcessing) {
+        updateUIState("ready");
+        // Auto-start next recording after a brief pause
+        setTimeout(() => {
+          if (!isRecording && !isProcessing) {
+            handleVoiceInteraction();
+          }
+        }, 1500);
+      }
     }, 1000);
   });
 
-  // --- Connection Status Monitoring ---
+  // Connection status monitoring
   window.addEventListener("online", () => {
-    hideError();
-    if (!isProcessing) {
-      enableRecordingControls();
+    if (!isRecording && !isProcessing) {
+      updateUIState("ready");
     }
   });
 
   window.addEventListener("offline", () => {
-    showError("You are offline. Please check your internet connection.", false);
-    updateStatus("Offline", true);
-    disableAllControls();
+    updateUIState("error", "You are offline. Please check your connection.");
   });
 
-  // --- Initial Status ---
-  enableRecordingControls();
-  updateStatus('Press "Start" to begin conversation.');
+  // Initialize
+  initializeSession();
+  updateUIState("ready");
 });
