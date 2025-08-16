@@ -1,30 +1,38 @@
 import os
 import shutil
-import requests
-import assemblyai as aai
-import google.generativeai as genai
-from murf.client import Murf
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+import logging
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Import services
+from services.assemblyai_service import AssemblyAIService
+from services.murf_service import MurfService
+from services.gemini_service import GeminiService  # Import Gemini service
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
 # Initialize FastAPI
-app = FastAPI()
+app = FastAPI(
+    title="AI Voice Agent Backend",
+    description="Backend for the 30 Days AI Voice Agent project, featuring STT, TTS, and LLM integration.",
+    version="0.1.0",
+)
 
 # --- CORS Middleware Setup ---
-origins = ["*"]
+origins = ["*"]  # For development, allow all origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -37,270 +45,222 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- API Key and SDK Configuration ---
-MURF_API_KEY = os.getenv("MURF_API_KEY")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Validate API Keys at startup
-missing_keys = []
-if not MURF_API_KEY:
-    missing_keys.append("MURF_API_KEY")
-if not ASSEMBLYAI_API_KEY:
-    missing_keys.append("ASSEMBLYAI_API_KEY")
-if not GEMINI_API_KEY:
-    missing_keys.append("GEMINI_API_KEY")
-
-if missing_keys:
-    logger.warning(f"Missing API keys: {', '.join(missing_keys)}")
-
-# Configure APIs only if keys are present
-if ASSEMBLYAI_API_KEY:
-    aai.settings.api_key = ASSEMBLYAI_API_KEY
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-if MURF_API_KEY:
-    murf = Murf(api_key=MURF_API_KEY)
-
-# --- In-Memory Datastore for Chat History ---
-chat_histories = {}
-
-# --- Error Response Templates ---
-ERROR_RESPONSES = {
-    "stt_error": "I'm having trouble hearing you right now. Could you please try again?",
-    "llm_error": "I'm having trouble thinking right now. Please give me a moment and try again.",
-    "tts_error": "I'm having trouble speaking right now. Let me try a different approach.",
-    "api_key_error": "I'm having configuration issues. Please contact support.",
-    "network_error": "I'm having trouble connecting right now. Please check your connection and try again.",
-    "general_error": "Something unexpected happened. Please try again in a moment.",
-}
+# --- Initialize Services ---
+# API keys are retrieved from environment variables
+try:
+    murf_service = MurfService(api_key=os.getenv("MURF_API_KEY"))
+    assemblyai_service = AssemblyAIService(api_key=os.getenv("ASSEMBLYAI_API_KEY"))
+    gemini_service = GeminiService(api_key=os.getenv("GEMINI_API_KEY"))
+except ValueError as e:
+    logger.error(f"Failed to initialize service due to missing API key: {e}")
+    # In a production app, you might want to stop startup or provide a fallback.
+    # For this challenge, we'll let the HTTPException handle it at endpoint level.
 
 
-# --- Pydantic Models ---
-class TTSRequest(BaseModel):
-    text: str
+# --- Pydantic Models for Request/Response ---
+class GenerateAudioRequest(BaseModel):
+    text: str = Field(
+        ..., min_length=1, max_length=500, description="Text to convert to speech."
+    )
+    voice_id: str = Field(
+        "en-US-natalie", description="Murf AI voice ID to use for speech generation."
+    )
 
 
-class LLMQueryRequest(BaseModel):
-    text: str
+class AudioURLResponse(BaseModel):
+    audio_url: str = Field(..., description="URL of the generated audio file.")
 
 
-# --- Utility Functions for Error Handling ---
-def create_fallback_audio_response(error_message: str):
-    """
-    Attempts to create a fallback audio response using TTS.
-    If TTS fails, returns a text-only response.
-    """
-    if not MURF_API_KEY:
-        return {"error": True, "message": error_message, "audio_url": None}
-
-    try:
-        api_response = murf.text_to_speech.generate(
-            text=error_message, voice_id="en-US-natalie"
-        )
-        return {
-            "error": True,
-            "message": error_message,
-            "audio_url": api_response.audio_file,
-        }
-    except Exception as e:
-        logger.error(f"Fallback TTS failed: {str(e)}")
-        return {"error": True, "message": error_message, "audio_url": None}
+class TranscriptionResponse(BaseModel):
+    transcription: str = Field(..., description="The transcribed text from the audio.")
 
 
-def handle_stt_error(error):
-    """Handle STT-specific errors with appropriate fallbacks."""
-    logger.error(f"STT Error: {str(error)}")
-    if "api key" in str(error).lower() or "unauthorized" in str(error).lower():
-        return create_fallback_audio_response(ERROR_RESPONSES["api_key_error"])
-    elif "network" in str(error).lower() or "connection" in str(error).lower():
-        return create_fallback_audio_response(ERROR_RESPONSES["network_error"])
-    else:
-        return create_fallback_audio_response(ERROR_RESPONSES["stt_error"])
-
-
-def handle_llm_error(error):
-    """Handle LLM-specific errors with appropriate fallbacks."""
-    logger.error(f"LLM Error: {str(error)}")
-    if "api key" in str(error).lower() or "unauthorized" in str(error).lower():
-        return create_fallback_audio_response(ERROR_RESPONSES["api_key_error"])
-    elif "quota" in str(error).lower() or "limit" in str(error).lower():
-        return create_fallback_audio_response(
-            "I've reached my thinking limit for now. Please try again later."
-        )
-    else:
-        return create_fallback_audio_response(ERROR_RESPONSES["llm_error"])
-
-
-def handle_tts_error(error, text_response):
-    """Handle TTS-specific errors with text fallback."""
-    logger.error(f"TTS Error: {str(error)}")
-    return {
-        "error": True,
-        "message": f"Audio generation failed, but here's my response: {text_response}",
-        "audio_url": None,
-    }
+class EchoBotAudioRequest(BaseModel):
+    # This model isn't directly used for UploadFile, but for documentation consistency.
+    # FastAPI handles UploadFile directly for form data.
+    audio: UploadFile
 
 
 # --- Frontend Route ---
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, summary="Serve Web Interface")
 async def read_root(request: Request):
-    """Serves the main index.html page."""
+    """
+    Serves the main `index.html` web interface for the AI Voice Agent.
+    """
+    logger.info("Serving index.html")
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# --- Robust Conversational Agent Endpoint (Day 11) ---
-@app.post("/agent/chat/{session_id}")
-async def agent_chat(session_id: str, audio: UploadFile = File(...)):
+# --- Text-to-Speech Endpoint ---
+@app.post(
+    "/generate-audio/",
+    response_model=AudioURLResponse,
+    summary="Generate Speech from Text",
+    description="Converts provided text into an audio file using Murf AI and returns its URL.",
+)
+async def generate_audio(request_body: GenerateAudioRequest):
     """
-    Handles a full conversational turn with comprehensive error handling:
-    Audio (user) -> STT -> Append to History -> LLM -> Append to History -> TTS -> Audio (bot)
+    Handles the conversion of text to speech.
+    - `request_body`: Contains the text and optionally a voice ID.
     """
-    logger.info(f"Processing chat request for session: {session_id}")
-
+    logger.info(
+        f"Received request to generate audio for text: {request_body.text[:50]}..."
+    )
     try:
-        # Validate audio file
-        if not audio or not audio.file:
-            raise HTTPException(status_code=400, detail="No audio file provided")
+        audio_url = murf_service.generate_speech(
+            text=request_body.text, voice_id=request_body.voice_id
+        )
+        return AudioURLResponse(audio_url=audio_url)
+    except HTTPException as e:
+        logger.error(f"Error generating audio: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in generate_audio endpoint:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
+        )
 
-        # Check for API key availability
-        if not ASSEMBLYAI_API_KEY:
-            logger.error("AssemblyAI API key not configured")
-            return create_fallback_audio_response(ERROR_RESPONSES["api_key_error"])
 
-        if not GEMINI_API_KEY:
-            logger.error("Gemini API key not configured")
-            return create_fallback_audio_response(ERROR_RESPONSES["api_key_error"])
+# --- Echo Bot v2 Endpoint ---
+@app.post(
+    "/tts/echo",
+    response_model=AudioURLResponse,
+    summary="Echo Audio in Murf AI Voice",
+    description="Receives an audio file, transcribes it, and then generates and returns audio of the transcription using Murf AI.",
+)
+async def tts_echo(
+    audio: UploadFile = File(..., description="Audio file to be echoed.")
+):
+    """
+    Processes an incoming audio file:
+    1. Transcribes the audio using AssemblyAI.
+    2. Generates new speech from the transcription using Murf AI.
+    3. Returns the URL of the new audio.
+    """
+    logger.info(
+        f"Received audio file for echo: {audio.filename}, content_type: {audio.content_type}"
+    )
+    try:
+        # Transcribe the incoming audio
+        transcript_text = assemblyai_service.transcribe_audio(audio.file)
 
-        # 1. TRANSCRIPTION PHASE with error handling
-        try:
-            logger.info("Starting transcription...")
-            transcriber = aai.Transcriber()
-            transcript = transcriber.transcribe(audio.file)
-
-            if transcript.status == aai.TranscriptStatus.error:
-                return handle_stt_error(f"Transcription failed: {transcript.error}")
-
-            if not transcript.text or transcript.text.strip() == "":
-                return create_fallback_audio_response(
-                    "I didn't catch that. Could you please speak more clearly?"
-                )
-
-            user_message = transcript.text.strip()
-            logger.info(f"Transcription successful: {user_message[:50]}...")
-
-        except Exception as e:
-            logger.error(f"STT Exception: {str(e)}")
-            return handle_stt_error(e)
-
-        # 2. CHAT HISTORY MANAGEMENT with error handling
-        try:
-            session_history = chat_histories.get(session_id, [])
-            session_history.append({"role": "user", "parts": [user_message]})
-            logger.info(f"Updated chat history for session {session_id}")
-        except Exception as e:
-            logger.error(f"Chat history error: {str(e)}")
-            # Continue without history if there's an issue
-            session_history = [{"role": "user", "parts": [user_message]}]
-
-        # 3. LLM RESPONSE GENERATION with error handling
-        try:
-            logger.info("Generating LLM response...")
-            model = genai.GenerativeModel("gemini-1.5-flash")
-
-            if len(session_history) > 1:
-                chat_session = model.start_chat(history=session_history[:-1])
-                llm_response = chat_session.send_message(
-                    session_history[-1]["parts"][0]
-                )
-            else:
-                llm_response = model.generate_content(user_message)
-
-            if not llm_response or not llm_response.text:
-                return handle_llm_error("Empty response from LLM")
-
-            llm_text = llm_response.text.strip()
-            logger.info(f"LLM response generated successfully: {llm_text[:50]}...")
-
-            # Update chat history with LLM response
-            session_history.append({"role": "model", "parts": [llm_text]})
-            chat_histories[session_id] = session_history
-
-        except Exception as e:
-            logger.error(f"LLM Exception: {str(e)}")
-            return handle_llm_error(e)
-
-        # 4. TEXT-TO-SPEECH GENERATION with error handling
-        if not MURF_API_KEY:
-            logger.error("Murf API key not configured")
-            return {
-                "error": True,
-                "message": f"Text response only: {llm_text}",
-                "audio_url": None,
-            }
-
-        try:
-            logger.info("Generating TTS response...")
-
-            # Handle character limit for Murf API (max 3000 chars)
-            if len(llm_text) > 3000:
-                llm_text = (
-                    llm_text[:2950]
-                    + "... I have more to say, but I'll keep it brief for now."
-                )
-                logger.warning("LLM response truncated due to TTS character limit")
-
-            murf_response = murf.text_to_speech.generate(
-                text=llm_text, voice_id="en-US-natalie"
+        if not transcript_text:
+            logger.warning("No clear transcription obtained for echo bot.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not understand audio or received empty audio.",
             )
 
-            logger.info("TTS generation successful")
-            return {"audio_url": murf_response.audio_file}
+        logger.info(f"Transcription for echo: {transcript_text[:50]}...")
 
-        except Exception as e:
-            logger.error(f"TTS Exception: {str(e)}")
-            return handle_tts_error(e, llm_text)
+        # Generate new audio from the transcript using Murf
+        echo_audio_url = murf_service.generate_speech(
+            text=transcript_text, voice_id="en-US-terrell"  # Or choose another voice
+        )
 
-    except HTTPException as he:
-        # Re-raise HTTP exceptions
-        raise he
+        return AudioURLResponse(audio_url=echo_audio_url)
+
+    except HTTPException as e:
+        logger.error(f"Error in tts_echo endpoint: {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Unexpected error in agent_chat: {str(e)}")
-        return create_fallback_audio_response(ERROR_RESPONSES["general_error"])
+        logger.exception("Unexpected error in tts_echo endpoint:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
+        )
     finally:
-        # Always ensure the audio file is properly closed
-        try:
-            if audio and hasattr(audio, "file") and not audio.file.closed:
-                audio.file.close()
-        except Exception as e:
-            logger.error(f"Error closing audio file: {str(e)}")
+        # Ensure the uploaded file is closed
+        if audio and not audio.file.closed:
+            audio.file.close()
 
 
-# --- Health Check Endpoint ---
-@app.get("/health")
-async def health_check():
-    """Health check endpoint to verify API connectivity."""
-    status = {
-        "status": "healthy",
-        "apis": {
-            "assemblyai": bool(ASSEMBLYAI_API_KEY),
-            "gemini": bool(GEMINI_API_KEY),
-            "murf": bool(MURF_API_KEY),
-        },
-    }
+# --- Placeholder for future LLM interaction endpoint (e.g., chat) ---
+@app.post(
+    "/chat/",
+    summary="Chat with AI Agent",
+    description="Sends text to the LLM and gets a text response.",
+)
+async def chat_with_agent(text_input: str):  # This would typically be a Pydantic model
+    logger.info(f"Received chat request: {text_input[:50]}...")
+    try:
+        response_text = gemini_service.get_chat_response(text_input)
+        return {"response": response_text}
+    except HTTPException as e:
+        logger.error(f"Error chatting with agent: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in chat_with_agent endpoint:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
+        )
 
-    # Test API connectivity if keys are present
-    warnings = []
 
-    if not ASSEMBLYAI_API_KEY:
-        warnings.append("AssemblyAI API key missing")
-    if not GEMINI_API_KEY:
-        warnings.append("Gemini API key missing")
-    if not MURF_API_KEY:
-        warnings.append("Murf API key missing")
+# --- Cleanup endpoint for Day 5 (optional, removed if not needed) ---
+@app.post(
+    "/upload-audio/", include_in_schema=False
+)  # Exclude from docs if only for legacy
+async def upload_audio_legacy(audio: UploadFile = File(...)):
+    """
+    (Legacy) Receives an audio file and saves it temporarily.
+    This endpoint is maintained for historical context but can be removed
+    if the /transcribe/file endpoint fully replaces its purpose.
+    """
+    UPLOADS_DIR = "uploads"
+    if not os.path.exists(UPLOADS_DIR):
+        os.makedirs(UPLOADS_DIR)
 
-    if warnings:
-        status["warnings"] = warnings
-        status["status"] = "degraded"
+    file_path = os.path.join(UPLOADS_DIR, audio.filename)
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(audio.file, buffer)
+        file_size = os.path.getsize(file_path)
+        logger.info(
+            f"Legacy upload successful: {audio.filename}, size: {file_size} bytes"
+        )
+        return {
+            "filename": audio.filename,
+            "content_type": audio.content_type,
+            "size_in_bytes": file_size,
+        }
+    except Exception as e:
+        logger.exception("Error during legacy audio upload:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading file: {str(e)}",
+        )
+    finally:
+        if audio and not audio.file.closed:
+            audio.file.close()
 
-    return status
+
+# --- Transcription Endpoint (Day 6 - Maintained for clarity, though /tts/echo uses similar logic) ---
+@app.post(
+    "/transcribe/file",
+    response_model=TranscriptionResponse,
+    summary="Transcribe Audio File",
+    description="Transcribes an uploaded audio file using AssemblyAI.",
+)
+async def transcribe_file_endpoint(
+    audio: UploadFile = File(..., description="Audio file to transcribe.")
+):
+    logger.info(
+        f"Received audio file for transcription: {audio.filename}, content_type: {audio.content_type}"
+    )
+    try:
+        transcript_text = assemblyai_service.transcribe_audio(audio.file)
+        return TranscriptionResponse(transcription=transcript_text)
+    except HTTPException as e:
+        logger.error(f"Error transcribing file: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in transcribe_file_endpoint:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
+        )
+    finally:
+        if audio and not audio.file.closed:
+            audio.file.close()
