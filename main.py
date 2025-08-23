@@ -12,7 +12,7 @@ if __name__ == "__main__":
     logger.info("Starting Uvicorn server for AI Voice Agent.")
     uvicorn.run(
         "app:app",  # Point to the app instance in app.py
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=True,
         log_level="info",
