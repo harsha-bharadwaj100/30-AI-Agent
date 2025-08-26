@@ -1,36 +1,48 @@
 import os
-import uuid
+import asyncio
+import assemblyai as aai
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
+load_dotenv()
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+aai.settings.api_key = ASSEMBLYAI_API_KEY
 
 app = FastAPI()
 
-# Setup (optional if you already have static/template mount)
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Create uploads folder if not exists
-UPLOADS_DIR = "uploads"
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-
-@app.websocket("/ws/stream-audio")
-async def stream_audio(websocket: WebSocket):
+@app.websocket("/ws/stream-for-transcription")
+async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    # Generate a unique filename each time a client connects
-    file_id = str(uuid.uuid4())
-    file_path = os.path.join(UPLOADS_DIR, f"{file_id}.webm")
+    print("WebSocket connection accepted.")
 
-    try:
-        with open(file_path, "wb") as audio_file:
-            print(f"Receiving audio and saving to: {file_path}")
+    # Initialize the AssemblyAI real-time transcriber
+    transcriber = aai.RealtimeTranscriber(
+        sample_rate=16000,  # 16kHz, as required!
+        encoding="pcm_s16le",  # PCM 16-bit little-endian
+        channels=1,
+    )
+
+    # Start AssemblyAI websocket connection
+    async with transcriber:
+        print("Connected to AssemblyAI websocket for transcription...")
+
+        # Start async task to fetch transcripts as they arrive
+        async def receive_transcripts():
+            async for transcript in transcriber:
+                if transcript.text:
+                    print("Transcript:", transcript.text)
+
+        transcript_task = asyncio.create_task(receive_transcripts())
+
+        try:
             while True:
+                # Receive audio chunk (as bytes) from the client
                 chunk = await websocket.receive_bytes()
-                audio_file.write(chunk)
-    except WebSocketDisconnect:
-        print(f"WebSocket disconnected. Audio saved to {file_path}")
-    except Exception as e:
-        print(f"Error: {e}")
-        await websocket.close()
+                # Forward to AssemblyAI transcriber
+                await transcriber.send(chunk)
+        except WebSocketDisconnect:
+            print("WebSocket client disconnected.")
+        finally:
+            await transcriber.close()
+            transcript_task.cancel()
