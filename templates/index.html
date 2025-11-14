@@ -4,111 +4,156 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Day 17: Real-time Transcription</title>
+    <title>AI Voice Agent</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            background-color: #f0f2f5;
+        * {
             margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
         }
 
         .container {
-            background: #fff;
-            padding: 30px 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            max-width: 600px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
             width: 90%;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
         }
 
         h1 {
-            color: #333;
-            margin-bottom: 15px;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
-        p {
-            color: #666;
-            margin-bottom: 30px;
-        }
-
-        .controls button {
-            padding: 12px 25px;
-            font-size: 16px;
-            border-radius: 8px;
-            border: none;
-            cursor: pointer;
-            transition: background-color 0.2s, transform 0.1s;
-            margin: 0 10px;
-        }
-
-        #start-streaming {
-            background-color: #28a745;
-            color: white;
-        }
-
-        #start-streaming:disabled {
-            background-color: #a3d9b1;
-            cursor: not-allowed;
-        }
-
-        #stop-streaming {
-            background-color: #dc3545;
-            color: white;
-        }
-
-        #stop-streaming:disabled {
-            background-color: #f1aeb5;
-            cursor: not-allowed;
-        }
-
-        .status-container {
-            margin-top: 30px;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #dee2e6;
-        }
-
-        #status {
-            font-weight: 500;
-            color: #495057;
-            margin-bottom: 10px;
-        }
-
-        #transcript {
-            min-height: 50px;
-            color: #212529;
+        .subtitle {
+            color: #6b7280;
             font-size: 1.1rem;
-            line-height: 1.5;
-            text-align: left;
+            margin-bottom: 40px;
+            font-weight: 400;
+        }
+
+        .voice-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            font-size: 2.5rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            margin: 20px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .voice-button:hover:not(:disabled) {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(102, 126, 234, 0.4);
+        }
+
+        .voice-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .voice-button.recording {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .voice-button.processing {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            animation: spin 2s linear infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 10px 30px rgba(239, 68, 68, 0.3), 0 0 0 0 rgba(239, 68, 68, 0.7);
+            }
+
+            50% {
+                box-shadow: 0 10px 30px rgba(239, 68, 68, 0.3), 0 0 0 20px rgba(239, 68, 68, 0);
+            }
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .status {
+            margin-top: 30px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            min-height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .status.error {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        /* Hide default audio player */
+        audio {
+            display: none;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>Real-time Audio Transcription</h1>
-        <p>Click "Start Streaming" and speak to see the live transcription below.</p>
+        <h1>AI Voice Agent</h1>
+        <p class="subtitle">Click the mic to start a conversation</p>
 
-        <div class="controls">
-            <button id="start-streaming">Start Streaming</button>
-            <button id="stop-streaming" disabled>Stop Streaming</button>
+        <button class="voice-button" id="voice-button">
+            <i class="fas fa-microphone" id="button-icon"></i>
+        </button>
+
+        <div class="status" id="status">
+            Click to speak
         </div>
 
-        <div class="status-container">
-            <div id="status">Status: Disconnected</div>
-            <div id="transcript">
-                <p><em>Transcription will appear here...</em></p>
-            </div>
-        </div>
+        <audio id="response-audio" autoplay></audio>
     </div>
 
-    <!-- The JavaScript to power this will go here -->
     <script src="{{ url_for('static', path='script.js') }}"></script>
 </body>
 

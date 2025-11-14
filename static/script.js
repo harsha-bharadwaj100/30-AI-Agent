@@ -1,105 +1,177 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const startBtn = document.getElementById("start-streaming");
-  const stopBtn = document.getElementById("stop-streaming");
+  // UI Elements
+  const voiceButton = document.getElementById("voice-button");
+  const buttonIcon = document.getElementById("button-icon");
   const statusDiv = document.getElementById("status");
-  const transcriptDiv = document.getElementById("transcript");
+  const responseAudio = document.getElementById("response-audio");
 
+  // State management
   let mediaRecorder;
-  let websocket;
-  let audioContext;
-  let processor;
-  let stream;
+  let recordedChunks = [];
+  let sessionId = null;
+  let isRecording = false;
+  let isProcessing = false;
 
-  // --- WebSocket and Audio Processing Logic ---
-  const setupWebSocket = () => {
-    websocket = new WebSocket(
-      `ws://${window.location.host}/ws/stream-for-transcription`
+  // Initialize session
+  function initializeSession() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("session_id")) {
+      sessionId = params.get("session_id");
+    } else {
+      sessionId =
+        Date.now().toString(36) + Math.random().toString(36).substring(2);
+      window.history.pushState(
+        { sessionId },
+        `Session: ${sessionId}`,
+        `?session_id=${sessionId}`
+      );
+    }
+    console.log("Session ID:", sessionId);
+  }
+
+  // Update UI state
+  function updateUIState(state, message = "") {
+    voiceButton.disabled = false;
+    voiceButton.classList.remove("recording", "processing");
+    buttonIcon.classList.remove(
+      "fa-microphone",
+      "fa-stop",
+      "fa-spinner",
+      "fa-spin",
+      "fa-volume-up",
+      "fa-exclamation-triangle"
     );
 
-    websocket.onopen = () => {
-      statusDiv.textContent = "Status: Connected. Start speaking!";
-      transcriptDiv.innerHTML = "<p><em>Listening...</em></p>";
-    };
+    if (state === "ready") {
+      buttonIcon.classList.add("fa-microphone");
+      statusDiv.textContent = message || "Click to speak";
+      statusDiv.classList.remove("error");
+    } else if (state === "listening") {
+      voiceButton.classList.add("recording");
+      buttonIcon.classList.add("fa-stop");
+      statusDiv.textContent = message || "Listening... Click to stop";
+      statusDiv.classList.remove("error");
+    } else if (state === "processing") {
+      isProcessing = true;
+      voiceButton.disabled = true;
+      voiceButton.classList.add("processing");
+      buttonIcon.classList.add("fa-spinner", "fa-spin");
+      statusDiv.textContent = message || "Thinking...";
+      statusDiv.classList.remove("error");
+    } else if (state === "responding") {
+      isProcessing = true;
+      voiceButton.disabled = true;
+      buttonIcon.classList.add("fa-volume-up");
+      statusDiv.textContent = message || "AI is responding...";
+      statusDiv.classList.remove("error");
+    } else if (state === "error") {
+      isProcessing = false;
+      buttonIcon.classList.add("fa-exclamation-triangle");
+      statusDiv.textContent = message || "Something went wrong";
+      statusDiv.classList.add("error");
+    }
+  }
 
-    websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.transcript) {
-        transcriptDiv.innerHTML = `<p>${data.transcript}</p>`;
+  // Handle voice interaction
+  async function handleVoiceInteraction() {
+    if (isProcessing) return; // Don't do anything if processing
+
+    if (!isRecording) {
+      // Start recording
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        mediaRecorder = new MediaRecorder(stream);
+        recordedChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) recordedChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          const audioBlob = new Blob(recordedChunks, { type: "audio/webm" });
+          processAudio(audioBlob);
+          stream.getTracks().forEach((track) => track.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        updateUIState("listening");
+      } catch (error) {
+        console.error("Microphone access error:", error);
+        updateUIState("error", "Could not access microphone.");
       }
-    };
+    } else {
+      // Stop recording
+      mediaRecorder.stop();
+      isRecording = false;
+      updateUIState("processing");
+    }
+  }
 
-    websocket.onclose = () => {
-      statusDiv.textContent = "Status: Disconnected";
-    };
+  // Process audio with AI
+  async function processAudio(audioBlob) {
+    if (!sessionId) initializeSession();
 
-    websocket.onerror = (error) => {
-      console.error("WebSocket Error:", error);
-      statusDiv.textContent = "Status: Error connecting.";
-    };
-  };
+    const formData = new FormData();
+    formData.append("audio", audioBlob, `recording-${Date.now()}.webm`);
 
-  const startStreaming = async () => {
     try {
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
-
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioContext = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000, // Set sample rate to 16kHz for AssemblyAI
+      const response = await fetch(`/agent/chat/${sessionId}`, {
+        method: "POST",
+        body: formData,
       });
 
-      const source = audioContext.createMediaStreamSource(stream);
-      processor = audioContext.createScriptProcessor(1024, 1, 1);
+      const result = await response.json();
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-
-      processor.onaudioprocess = (event) => {
-        const inputData = event.inputBuffer.getChannelData(0);
-        // Convert to 16-bit PCM
-        const pcmData = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          let s = Math.max(-1, Math.min(1, inputData[i]));
-          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (result.error) {
+        // Handle errors returned from the server (e.g., fallback audio)
+        updateUIState("responding", result.message);
+        if (result.audio_url) {
+          responseAudio.src = result.audio_url;
+          // Playback will trigger 'ended' event
+        } else {
+          // If even fallback audio failed, just reset
+          setTimeout(() => updateUIState("ready"), 3000);
         }
-
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
-          websocket.send(pcmData.buffer);
-        }
-      };
-
-      setupWebSocket();
+      } else if (result.audio_url) {
+        // Successful response
+        updateUIState("responding");
+        responseAudio.src = result.audio_url;
+        // Playback will trigger 'ended' event
+      }
     } catch (error) {
-      console.error("Error starting stream:", error);
-      statusDiv.textContent = "Error: Could not access microphone.";
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+      console.error("Processing error:", error);
+      updateUIState("error", "Connection failed. Please try again.");
+      setTimeout(() => updateUIState("ready"), 3000);
     }
-  };
+  }
 
-  const stopStreaming = () => {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-    }
-    if (processor) {
-      processor.disconnect();
-    }
-    if (audioContext) {
-      audioContext.close();
-    }
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (websocket && websocket.readyState === WebSocket.OPEN) {
-      websocket.close();
-    }
+  // Event listeners
+  voiceButton.addEventListener("click", handleVoiceInteraction);
 
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    statusDiv.textContent = "Status: Disconnected";
-  };
+  // Auto-continue conversation after AI response
+  responseAudio.addEventListener("ended", () => {
+    isProcessing = false; // Processing is done
+    updateUIState("ready", "Ready for your next message...");
 
-  // --- Event Listeners ---
-  startBtn.addEventListener("click", startStreaming);
-  stopBtn.addEventListener("click", stopStreaming);
+    // This makes the conversation feel continuous
+    setTimeout(() => {
+      if (!isRecording && !isProcessing) {
+        // Check state again
+        handleVoiceInteraction(); // Auto-start next recording
+      }
+    }, 1000); // 1-second pause
+  });
+
+  responseAudio.addEventListener("error", () => {
+    isProcessing = false;
+    updateUIState("error", "Could not play audio response.");
+    setTimeout(() => updateUIState("ready"), 3000);
+  });
+
+  // Initialize
+  initializeSession();
+  updateUIState("ready");
 });
