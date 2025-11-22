@@ -1,0 +1,8 @@
+.env
+.venv
+__pycache__
+.git
+uploads
+Pipfile
+Pipfile.lock
+test.py
