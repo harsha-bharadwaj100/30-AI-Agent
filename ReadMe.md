@@ -27,8 +27,8 @@ This AI Voice Agent represents the culmination of a 30-day intensive development
 - Fully containerized application for zero-dependency setup.
 - **Self-Hosted:** API keys remain on your local machine; no data is sent to a third-party backend server.
 
-#### 🤖 **Distinct Persona ("Botto")**
-- The agent is not just a bland bot; it possesses a witty, slightly sassy personality ("Botto") that adds character to interactions.
+#### 🤖 **Distinct Persona ("Nova")**
+- The agent is not just a bland bot; it possesses a witty, slightly sassy personality ("Nova") that adds character to interactions.
 
 #### 🎙️ **Advanced Voice Processing**
 - Real-time audio recording via browser MediaRecorder API.
