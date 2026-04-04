@@ -1,17 +1,19 @@
+import logging
 import os
-import shutil
-import requests
+
 import assemblyai as aai
 import google.generativeai as genai
-from murf.client import Murf
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
-import logging
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from murf.client import Murf
+
+from services.ingestion_service import ingest_upload
+from services.persistence_service import PersistenceService
+from services.vector_service import VectorService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +43,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
 
 # Validate API Keys at startup
 if not MURF_API_KEY:
@@ -58,8 +61,28 @@ if GEMINI_API_KEY:
 if MURF_API_KEY:
     murf = Murf(api_key=MURF_API_KEY)
 
-# --- In-Memory Datastore for Chat History ---
-chat_histories = {}
+# --- Persistence and Retrieval Services ---
+persistence_service = PersistenceService(os.getenv("SQLITE_DB_PATH", "data/app.db"))
+
+try:
+    vector_service = VectorService(
+        persist_dir=os.getenv("CHROMA_DIR", "data/chroma"),
+        collection_name=os.getenv("CHROMA_COLLECTION", "rag_chunks"),
+        embedding_model=os.getenv(
+            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        ),
+    )
+except Exception as vector_error:
+    logger.error(f"Vector service failed to initialize: {vector_error}")
+    vector_service = None
+
+AGENT_PERSONA = (
+    "You are 'Nova', a witty, slightly sassy robot assistant. "
+    "Prioritize retrieved context when available and cite sources clearly. "
+    "If retrieval does not contain the answer, you may answer from general knowledge "
+    "and explicitly mention that you are using general knowledge. "
+    "Keep answers concise and actionable."
+)
 
 # --- Error Response Templates ---
 ERROR_RESPONSES = {
@@ -90,11 +113,111 @@ def create_fallback_audio_response(error_message: str):
         return {"error": True, "message": error_message, "audio_url": None}
 
 
+def _render_recent_history(history_items: list[dict], limit: int = 8) -> str:
+    if not history_items:
+        return "No prior conversation."
+
+    lines = []
+    for item in history_items[-limit:]:
+        role = item.get("role", "user")
+        parts = item.get("parts", [""])
+        content = parts[0] if parts else ""
+        lines.append(f"{role.upper()}: {content}")
+    return "\n".join(lines)
+
+
+def _build_rag_prompt(
+    user_message: str,
+    history_items: list[dict],
+    retrieved_chunks: list[dict],
+) -> str:
+    history_text = _render_recent_history(history_items)
+
+    if retrieved_chunks:
+        context_blocks = []
+        for idx, chunk in enumerate(retrieved_chunks, start=1):
+            meta = chunk.get("metadata") or {}
+            source = meta.get("source", "unknown")
+            chunk_idx = meta.get("chunk_index", "?")
+            context_blocks.append(
+                f"[{idx}] source={source} chunk={chunk_idx}\n{chunk.get('content', '')}"
+            )
+        context_text = "\n\n".join(context_blocks)
+    else:
+        context_text = "No retrieved context available."
+
+    return (
+        "Use this structure:\n"
+        "1) Answer with retrieved context when relevant.\n"
+        "2) If context is insufficient, answer using general knowledge and state that clearly.\n"
+        "3) End with a short helpful follow-up.\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Retrieved context:\n{context_text}\n\n"
+        f"User question:\n{user_message}"
+    )
+
+
+def _extract_sources(retrieved_chunks: list[dict]) -> list[dict]:
+    seen = set()
+    sources = []
+    for chunk in retrieved_chunks:
+        metadata = chunk.get("metadata") or {}
+        source_key = (
+            metadata.get("doc_id"),
+            metadata.get("source"),
+            metadata.get("chunk_index"),
+        )
+        if source_key in seen:
+            continue
+        seen.add(source_key)
+        sources.append(
+            {
+                "doc_id": metadata.get("doc_id"),
+                "source": metadata.get("source", "unknown"),
+                "chunk_index": metadata.get("chunk_index"),
+                "distance": chunk.get("distance"),
+            }
+        )
+    return sources
+
+
 # --- Frontend Route ---
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     """Serves the main index.html page."""
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/chat/{session_id}")
+async def get_chat_history(session_id: str):
+    history = persistence_service.get_session_messages(session_id=session_id, limit=50)
+    return {"session_id": session_id, "messages": history}
+
+
+@app.get("/documents")
+async def list_documents():
+    return {"documents": persistence_service.list_documents()}
+
+
+@app.post("/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    if vector_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Vector service is not available. Check embedding dependencies.",
+        )
+    result = await ingest_upload(file, persistence_service, vector_service)
+    return result
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    if vector_service is not None:
+        vector_service.delete_by_doc_id(doc_id)
+    deleted = persistence_service.delete_document(doc_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"deleted": True, "doc_id": doc_id}
 
 
 # --- Robust Conversational Agent Endpoint ---
@@ -105,17 +228,6 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
     Audio (user) -> STT -> History -> LLM -> History -> TTS -> Audio (bot)
     """
     logger.info(f"Processing chat request for session: {session_id}")
-    # --- START OF DAY 24 CHANGE ---
-
-    # Define the agent's persona
-    AGENT_PERSONA = (
-        "You are 'Nova', a witty, slightly sassy robot assistant. "
-        "You are helpful, but you always end your answers with a clever, "
-        "sarcastic joke or a funny observation about humans. "
-        "Keep your answers super concise and to the point, but don't forget the sass."
-    )
-
-    # --- END OF DAY 24 CHANGE ---
     # Check for API key availability
     if not ASSEMBLYAI_API_KEY or not GEMINI_API_KEY or not MURF_API_KEY:
         logger.error("One or more API keys are not configured.")
@@ -140,29 +252,42 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
         user_message = transcript.text.strip()
         logger.info(f"Transcription successful: {user_message[:50]}...")
 
-        # 2. CHAT HISTORY MANAGEMENT
-        session_history = chat_histories.get(session_id, [])
-        session_history.append({"role": "user", "parts": [user_message]})
+        # 2. CHAT HISTORY MANAGEMENT + USER MESSAGE PERSISTENCE
+        prior_history = persistence_service.get_session_messages(session_id=session_id)
+        persistence_service.save_message(session_id, "user", user_message)
 
-        # 3. LLM RESPONSE GENERATION
+        # 3. RETRIEVAL PHASE
+        retrieved_chunks = []
+        if vector_service is not None:
+            try:
+                retrieved_chunks = vector_service.query(user_message, top_k=RAG_TOP_K)
+            except Exception as retrieval_error:
+                logger.error(f"Retrieval failed: {retrieval_error}")
+                retrieved_chunks = []
+
+        rag_prompt = _build_rag_prompt(user_message, prior_history, retrieved_chunks)
+
+        # 4. LLM RESPONSE GENERATION
         logger.info("Generating LLM response...")
         model = genai.GenerativeModel(
             "gemini-2.5-flash-lite", system_instruction=AGENT_PERSONA
         )
 
-        # Start chat with history (excluding the latest user message)
-        chat_session = model.start_chat(history=session_history[:-1])
-        # Send the latest user message
-        llm_response = chat_session.send_message(session_history[-1])
-
-        llm_text = llm_response.text.strip()
+        llm_response = model.generate_content(rag_prompt)
+        llm_text = (llm_response.text or "").strip()
+        if not llm_text:
+            llm_text = ERROR_RESPONSES["llm_error"]
         logger.info(f"LLM response generated: {llm_text[:50]}...")
 
-        # Update chat history with LLM response
-        session_history.append({"role": "model", "parts": [llm_text]})
-        chat_histories[session_id] = session_history
+        sources = _extract_sources(retrieved_chunks)
+        persistence_service.save_message(
+            session_id,
+            "model",
+            llm_text,
+            metadata={"sources": sources, "retrieval_count": len(retrieved_chunks)},
+        )
 
-        # 4. TEXT-TO-SPEECH GENERATION
+        # 5. TEXT-TO-SPEECH GENERATION
         logger.info("Generating TTS response...")
 
         # Handle Murf's 3000 character limit
@@ -177,7 +302,13 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
         )
 
         logger.info("TTS generation successful.")
-        return {"audio_url": murf_response.audio_file, "error": False}
+        return {
+            "audio_url": murf_response.audio_file,
+            "text": llm_text,
+            "sources": sources,
+            "retrieval_count": len(retrieved_chunks),
+            "error": False,
+        }
 
     except Exception as e:
         logger.error(f"Unexpected error in agent_chat: {str(e)}")

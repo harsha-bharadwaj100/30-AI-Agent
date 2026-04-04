@@ -26,6 +26,7 @@
 
         .container {
             background: rgba(255, 255, 255, 0.95);
+            -webkit-backdrop-filter: blur(20px);
             backdrop-filter: blur(20px);
             border-radius: 24px;
             padding: 40px;
@@ -131,6 +132,85 @@
             font-weight: 600;
         }
 
+        .rag-panel {
+            margin-top: 28px;
+            text-align: left;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px;
+        }
+
+        .rag-panel h3 {
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+
+        .upload-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .upload-row input[type="file"] {
+            flex: 1;
+        }
+
+        .upload-row button {
+            border: none;
+            background: #2563eb;
+            color: white;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .upload-row button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .upload-status {
+            font-size: 0.85rem;
+            color: #475569;
+            min-height: 18px;
+            margin-bottom: 8px;
+        }
+
+        .sources-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 110px;
+            overflow: auto;
+        }
+
+        .sources-list li {
+            font-size: 0.82rem;
+            background: #eef2ff;
+            border-radius: 8px;
+            padding: 6px 8px;
+            color: #1f2937;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
         /* Hide default audio player */
         audio {
             display: none;
@@ -143,12 +223,26 @@
         <h1>AI Voice Agent</h1>
         <p class="subtitle">Click the mic to start a conversation</p>
 
-        <button class="voice-button" id="voice-button">
+        <button class="voice-button" id="voice-button" title="Start or stop voice recording">
             <i class="fas fa-microphone" id="button-icon"></i>
         </button>
 
         <div class="status" id="status">
             Click to speak
+        </div>
+
+        <div class="rag-panel">
+            <h3>Knowledge Base (TXT / MD)</h3>
+            <div class="upload-row">
+                <label for="doc-upload" class="sr-only">Upload knowledge document</label>
+                <input type="file" id="doc-upload" accept=".txt,.md" title="Upload .txt or .md knowledge file" />
+                <button id="upload-button" type="button">Upload</button>
+            </div>
+            <div id="upload-status" class="upload-status"></div>
+            <h3>Sources Used</h3>
+            <ul id="sources-list" class="sources-list">
+                <li>No citations yet.</li>
+            </ul>
         </div>
 
         <audio id="response-audio" autoplay></audio>

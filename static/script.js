@@ -4,6 +4,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const buttonIcon = document.getElementById("button-icon");
   const statusDiv = document.getElementById("status");
   const responseAudio = document.getElementById("response-audio");
+  const uploadInput = document.getElementById("doc-upload");
+  const uploadButton = document.getElementById("upload-button");
+  const uploadStatus = document.getElementById("upload-status");
+  const sourcesList = document.getElementById("sources-list");
 
   // State management
   let mediaRecorder;
@@ -23,7 +27,7 @@ document.addEventListener("DOMContentLoaded", () => {
       window.history.pushState(
         { sessionId },
         `Session: ${sessionId}`,
-        `?session_id=${sessionId}`
+        `?session_id=${sessionId}`,
       );
     }
     console.log("Session ID:", sessionId);
@@ -39,7 +43,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "fa-spinner",
       "fa-spin",
       "fa-volume-up",
-      "fa-exclamation-triangle"
+      "fa-exclamation-triangle",
     );
 
     if (state === "ready") {
@@ -69,6 +73,61 @@ document.addEventListener("DOMContentLoaded", () => {
       buttonIcon.classList.add("fa-exclamation-triangle");
       statusDiv.textContent = message || "Something went wrong";
       statusDiv.classList.add("error");
+    }
+  }
+
+  function renderSources(sources) {
+    sourcesList.innerHTML = "";
+    if (!sources || !sources.length) {
+      const li = document.createElement("li");
+      li.textContent = "No citations for this response.";
+      sourcesList.appendChild(li);
+      return;
+    }
+
+    sources.forEach((source) => {
+      const li = document.createElement("li");
+      const name = source.source || "unknown";
+      const chunk = source.chunk_index ?? "?";
+      li.textContent = `${name} (chunk ${chunk})`;
+      sourcesList.appendChild(li);
+    });
+  }
+
+  async function uploadDocument() {
+    if (!uploadInput.files || uploadInput.files.length === 0) {
+      uploadStatus.textContent = "Select a .txt or .md file first.";
+      alert("Please select a .txt or .md file first.");
+      return;
+    }
+
+    const file = uploadInput.files[0];
+    const formData = new FormData();
+    formData.append("file", file);
+
+    uploadButton.disabled = true;
+    uploadStatus.textContent = "Uploading and indexing...";
+
+    try {
+      const response = await fetch("/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        uploadStatus.textContent = result.detail || "Upload failed.";
+        alert(uploadStatus.textContent);
+      } else {
+        uploadStatus.textContent = `Indexed ${result.filename} with ${result.chunks_created} chunks.`;
+        uploadInput.value = "";
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      uploadStatus.textContent = "Upload failed due to network/server error.";
+      alert("Upload failed. Ensure backend is running and retry.");
+    } finally {
+      uploadButton.disabled = false;
     }
   }
 
@@ -139,6 +198,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Successful response
         updateUIState("responding");
         responseAudio.src = result.audio_url;
+        renderSources(result.sources || []);
         // Playback will trigger 'ended' event
       }
     } catch (error) {
@@ -150,6 +210,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Event listeners
   voiceButton.addEventListener("click", handleVoiceInteraction);
+  uploadButton.addEventListener("click", uploadDocument);
 
   // Auto-continue conversation after AI response
   responseAudio.addEventListener("ended", () => {
